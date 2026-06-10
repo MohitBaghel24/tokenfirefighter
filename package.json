@@ -1,0 +1,37 @@
+{
+  "name": "tokenfirefighter",
+  "version": "1.0.0",
+  "description": "Free local proxy that prevents AI API cost runaway loops",
+  "main": "dist/index.js",
+  "bin": {
+    "tokenfirefighter": "dist/index.js"
+  },
+  "type": "module",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "postbuild": "chmod +x dist/index.js",
+    "prepublishOnly": "npm run build",
+    "test": "node --test dist/tests/**/*.test.js",
+    "start": "node dist/index.js start"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.4.0",
+    "js-yaml": "^4.1.0",
+    "node-fetch": "^3.3.2"
+  }
+}
