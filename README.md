@@ -2,7 +2,7 @@
 
 ![npm version](https://img.shields.io/npm/v/tokenfirefighter)
 ![license](https://img.shields.io/npm/l/tokenfirefighter)
-![build status](https://img.shields.io/github/actions/workflow/status/YOURNAME/tokenfirefighter/ci.yml)
+![build status](https://img.shields.io/github/actions/workflow/status/MohitBaghel24/tokenfirefighter/ci.yml)
 
 Free local proxy that prevents AI API cost runaway loops.
 
@@ -51,7 +51,7 @@ providers:
 
 ## Contributing
 
-Found a bug or want to suggest an improvement? Please visit our [Issues page](https://github.com/YOURNAME/tokenfirefighter/issues).
+Found a bug or want to suggest an improvement? Please visit our [Issues page](https://github.com/MohitBaghel24/tokenfirefighter/issues).
 
 ---
 Made with 🔥 by TokenFirefighter Contributors
