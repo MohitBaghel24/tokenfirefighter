@@ -12,6 +12,7 @@ import { checkTokenTrajectory, addTokenCount } from './loop-l2.js';
 import { checkContentSimilarity, addBody } from './loop-l3.js';
 import { checkErrorRetryStorm, addError } from './loop-l4.js';
 import { detectProvider } from './adapters/index.js';
+import { serveDashboard, handleApi, handleSSE, broadcastEvent, addAlert } from './dashboard-web.js';
 
 const sessions = new Map<string, SessionState>();
 
@@ -65,6 +66,20 @@ async function handleRequest(
 ) {
   const method = req.method || 'GET';
   const urlPath = req.url || '/';
+
+  // Intercept dashboard and API routes
+  if (method === 'GET' && urlPath === '/dashboard') {
+    serveDashboard(res);
+    return;
+  }
+  if (method === 'GET' && urlPath === '/api/events') {
+    handleSSE(req, res);
+    return;
+  }
+  if (urlPath.startsWith('/api/')) {
+    handleApi(req, res, urlPath, config, sessions);
+    return;
+  }
 
   // Identify provider using adapters
   const adapter = detectProvider(urlPath, req.headers as Record<string, string>);
@@ -143,6 +158,9 @@ async function handleRequest(
           estimated_savings_usd: loopResult.estimated_savings_usd
         }
       }));
+      const reasonStr = loopResult.reason || 'Loop detected';
+      addAlert({ id: crypto.randomUUID(), type: 'loop_alert', severity: 'critical', message: reasonStr, timestamp: Date.now() });
+      broadcastEvent({ type: 'loop_alert', data: { layer: loopResult.layer, reason: reasonStr } });
       return;
     }
 
@@ -166,6 +184,9 @@ async function handleRequest(
             message: l3Result.reason
           }
         }));
+        const reasonStr = l3Result.reason || 'Content similarity loop detected';
+        addAlert({ id: crypto.randomUUID(), type: 'loop_alert', severity: 'critical', message: reasonStr, timestamp: Date.now() });
+        broadcastEvent({ type: 'loop_alert', data: { layer: l3Result.layer, reason: reasonStr } });
         return;
       }
     }
@@ -183,6 +204,7 @@ async function handleRequest(
         limit_usd: budgetResult.limit_usd
       }
     }));
+    // Note: checkBudget already emits budget_alert internally
     return;
   }
 
@@ -227,7 +249,10 @@ async function handleRequest(
               message: l4Result.reason
             }
           }));
+          const reasonStr = l4Result.reason || 'Error retry storm detected';
           addError(session, providerRes.statusCode, providerName);
+          addAlert({ id: crypto.randomUUID(), type: 'loop_alert', severity: 'critical', message: reasonStr, timestamp: Date.now() });
+          broadcastEvent({ type: 'loop_alert', data: { layer: l4Result.layer, reason: reasonStr } });
           return; // Skip streaming back the error
         }
       }
@@ -296,6 +321,17 @@ async function handleRequest(
       session.callCount += 1;
       session.sessionSpend += cost;
       session.lastCallAt = new Date();
+      
+      broadcastEvent({ 
+        type: 'call_complete', 
+        data: { 
+          provider: providerName, 
+          model,       
+          cost_usd: cost, 
+          blocked: false, 
+          http_status: providerRes.statusCode || 200 
+        } 
+      });
     });
   });
 

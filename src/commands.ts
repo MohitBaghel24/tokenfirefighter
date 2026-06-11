@@ -120,3 +120,10 @@ export function handleExport(args: string[], config: Config): void {
     console.log(outputStr);
   }
 }
+
+export async function handleDashboard(config: Config): Promise<void> {
+  const url = `http://localhost:${config.server.port}/dashboard`;
+  console.log(`Opening dashboard at ${url}`);
+  const { default: open } = await import('open');
+  await open(url);
+}

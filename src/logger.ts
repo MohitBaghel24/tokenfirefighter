@@ -48,6 +48,10 @@ CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp);
 
 let db: Database.Database;
 
+export function getDb(): Database.Database | undefined {
+  return db;
+}
+
 // Prepared statements
 let insertRequestStmt: Database.Statement;
 let insertSessionStmt: Database.Statement;

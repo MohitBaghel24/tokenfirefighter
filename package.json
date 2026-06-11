@@ -32,6 +32,7 @@
   "dependencies": {
     "better-sqlite3": "^9.4.0",
     "js-yaml": "^4.1.0",
-    "node-fetch": "^3.3.2"
+    "node-fetch": "^3.3.2",
+    "open": "^10.2.0"
   }
 }

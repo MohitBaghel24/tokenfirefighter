@@ -6,7 +6,7 @@ import { initConfig, loadConfig } from './config.js';
 import { startProxy } from './proxy.js';
 import { initDashboard, setupKeyboardInput } from './dashboard.js';
 import { initDatabase } from './logger.js';
-import { handleReset, handleLogs, handleStatus, handleExport } from './commands.js';
+import { handleReset, handleLogs, handleStatus, handleExport, handleDashboard } from './commands.js';
 
 // Importing types just to satisfy the instruction
 import { Config, RequestData, LoopResult, SessionState } from './types.js';
@@ -29,12 +29,13 @@ if (command === 'init') {
   initDatabase(config.logging.db_path);
   
   const isDaemon = args.includes('--daemon');
+  const isWeb = args.includes('--web');
   if (!isDaemon) {
     console.log("🧯 TokenFirefighter starting on localhost:" + config.server.port);
   }
   
   startProxy(config)
-    .then(startedServer => {
+    .then(async startedServer => {
       server = startedServer;
       if (!isDaemon) {
         initDashboard();
@@ -48,6 +49,12 @@ if (command === 'init') {
         });
       } else {
         console.log(`🧯 TokenFirefighter running in daemon mode on port ${config.server.port}`);
+      }
+
+      if (isWeb) {
+        console.log(`Dashboard: http://localhost:${config.server.port}/dashboard`);
+        const { default: open } = await import('open');
+        await open(`http://localhost:${config.server.port}/dashboard`);
       }
     })
     .catch(err => {
@@ -66,6 +73,9 @@ if (command === 'init') {
 } else if (command === 'export') {
   const config = loadConfig();
   handleExport(args, config);
+} else if (command === 'dashboard') {
+  const config = loadConfig();
+  handleDashboard(config);
 } else {
   console.log(`Usage: tokenfirefighter <command> [options]
 
@@ -73,6 +83,8 @@ Available commands:
   init           Create default config
   start          Start proxy server
                  --daemon    Run without dashboard
+                 --web       Open the Web Dashboard in your browser
+  dashboard      Open the Web Dashboard directly
   reset --daily  Reset daily budget
   logs           View recent requests
                  --last N    Number of logs to show

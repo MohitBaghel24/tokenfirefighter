@@ -1,5 +1,7 @@
 import { BudgetConfig, BudgetResult, SessionState } from './types.js';
 import { loadConfig } from './config.js';
+import { broadcastEvent, addAlert } from './dashboard-web.js';
+import * as crypto from 'crypto';
 
 export interface SessionBudgetState {
   sessionId: string;
@@ -57,9 +59,15 @@ export function checkBudget(sessionId: string, incomingCost: number, config: Bud
 
   // Check session cap
   if (projectedSessionSpend > config.session_max_usd) {
+    const reason = `Session budget exceeded. Projected: ${projectedSessionSpend.toFixed(2)} USD, Limit: ${config.session_max_usd} USD`;
+    addAlert({ id: crypto.randomUUID(), type: 'budget_alert', severity: 'critical', message: reason, timestamp: Date.now() });
+    broadcastEvent({
+      type: 'budget_alert',
+      data: { severity: 'critical', current: projectedSessionSpend, limit: config.session_max_usd, percent: (projectedSessionSpend/config.session_max_usd)*100, timestamp: Date.now() }
+    });
     return {
       allowed: false,
-      reason: `Session budget exceeded. Projected: ${projectedSessionSpend.toFixed(2)} USD, Limit: ${config.session_max_usd} USD`,
+      reason,
       current_spend_usd: state.sessionSpend,
       limit_usd: config.session_max_usd,
       time_until_reset
@@ -68,9 +76,15 @@ export function checkBudget(sessionId: string, incomingCost: number, config: Bud
 
   // Check daily cap
   if (projectedDailySpend > config.daily_max_usd) {
+    const reason = `Daily budget exceeded. Projected: ${projectedDailySpend.toFixed(2)} USD, Limit: ${config.daily_max_usd} USD`;
+    addAlert({ id: crypto.randomUUID(), type: 'budget_alert', severity: 'critical', message: reason, timestamp: Date.now() });
+    broadcastEvent({
+      type: 'budget_alert',
+      data: { severity: 'critical', current: projectedDailySpend, limit: config.daily_max_usd, percent: (projectedDailySpend/config.daily_max_usd)*100, timestamp: Date.now() }
+    });
     return {
       allowed: false,
-      reason: `Daily budget exceeded. Projected: ${projectedDailySpend.toFixed(2)} USD, Limit: ${config.daily_max_usd} USD`,
+      reason,
       current_spend_usd: state.dailySpend,
       limit_usd: config.daily_max_usd,
       time_until_reset
@@ -84,9 +98,15 @@ export function checkBudget(sessionId: string, incomingCost: number, config: Bud
 
   // 80% warning check
   if (projectedDailySpend > config.daily_max_usd * 0.8) {
+    const reason = `Warning: You have used over 80% of your daily budget (${projectedDailySpend.toFixed(2)} / ${config.daily_max_usd} USD)`;
+    addAlert({ id: crypto.randomUUID(), type: 'budget_warning', severity: 'warning', message: reason, timestamp: Date.now() });
+    broadcastEvent({
+      type: 'budget_warning',
+      data: { severity: 'warning', current: projectedDailySpend, limit: config.daily_max_usd, percent: (projectedDailySpend/config.daily_max_usd)*100, timestamp: Date.now() }
+    });
     return {
       allowed: true,
-      reason: `Warning: You have used over 80% of your daily budget (${projectedDailySpend.toFixed(2)} / ${config.daily_max_usd} USD)`,
+      reason,
       current_spend_usd: state.dailySpend,
       limit_usd: config.daily_max_usd,
       time_until_reset
