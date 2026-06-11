@@ -50,7 +50,7 @@ function checkProxyHealth(port: number, host: string): Promise<boolean> {
   });
 }
 
-export async function runSetup(dryRun: boolean = false) {
+export async function runSetup(dryRun: boolean = false, toolSlug?: string) {
   // Display the compatibility registry first as required
   runCliCompat();
 
@@ -82,8 +82,6 @@ export async function runSetup(dryRun: boolean = false) {
   console.log(`Using TokenFirefighter proxy URL: ${CYAN}${proxyUrl}${RESET}\n`);
 
   // Step 2: Choose AI tool
-  console.log(`${BOLD}Which AI tool are you using?${RESET}`);
-  
   // Build options dynamically from TOOL_REGISTRY + Custom
   const options = TOOL_REGISTRY.map(t => ({
     id: t.slug,
@@ -103,22 +101,35 @@ export async function runSetup(dryRun: boolean = false) {
     }
   });
 
-  options.forEach((opt, idx) => {
-    let prefix = '✅ ';
-    if (opt.support === 'partial') prefix = '⚠️  ';
-    if (opt.support === 'none') prefix = '❌ ';
-    console.log(`  ${idx + 1}) ${prefix}${opt.name}`);
-  });
+  let selectedOption: typeof options[number] | undefined = undefined;
 
-  const choiceStr = await askQuestion(`\nEnter selection (1-${options.length}): `);
-  const choiceIdx = parseInt(choiceStr, 10) - 1;
-
-  if (isNaN(choiceIdx) || choiceIdx < 0 || choiceIdx >= options.length) {
-    console.log(`${RED}Invalid selection. Setup cancelled.${RESET}`);
-    return;
+  if (toolSlug) {
+    selectedOption = options.find(opt => opt.id.toLowerCase() === toolSlug.toLowerCase());
+    if (!selectedOption) {
+      console.log(`${RED}Tool "${toolSlug}" is not recognized in setup registry.${RESET}\n`);
+    }
   }
 
-  const selectedOption = options[choiceIdx];
+  if (!selectedOption) {
+    console.log(`${BOLD}Which AI tool are you using?${RESET}`);
+    options.forEach((opt, idx) => {
+      let prefix = '✅ ';
+      if (opt.support === 'partial') prefix = '⚠️  ';
+      if (opt.support === 'none') prefix = '❌ ';
+      console.log(`  ${idx + 1}) ${prefix}${opt.name}`);
+    });
+
+    const choiceStr = await askQuestion(`\nEnter selection (1-${options.length}): `);
+    const choiceIdx = parseInt(choiceStr, 10) - 1;
+
+    if (isNaN(choiceIdx) || choiceIdx < 0 || choiceIdx >= options.length) {
+      console.log(`${RED}Invalid selection. Setup cancelled.${RESET}`);
+      return;
+    }
+
+    selectedOption = options[choiceIdx];
+  }
+
   const selectedTool = selectedOption.tool;
   console.log(`\nSelected: ${BOLD}${selectedOption.name}${RESET}`);
 

@@ -17,7 +17,8 @@ const command = args[0];
 
 if (command === 'setup') {
   const dryRun = args.includes('--dry-run');
-  runSetup(dryRun)
+  const toolSlug = args.filter(arg => arg !== 'setup' && !arg.startsWith('--'))[0];
+  runSetup(dryRun, toolSlug)
     .then(() => {
       process.exit(0);
     })
