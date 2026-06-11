@@ -36,6 +36,11 @@ export const DEFAULT_CONFIG: Config = {
     on_budget_100_percent: true,
     terminal_bell: true
   },
+  alerts: {
+    webhook_url: '',
+    on_loop_detected: true,
+    on_budget_exceeded: true
+  },
   providers: {
     openai: {
       api_key: '${OPENAI_API_KEY}',
@@ -54,6 +59,18 @@ export const DEFAULT_CONFIG: Config = {
       base_url: 'https://generativelanguage.googleapis.com',
       enabled: true,
       paths: ['/v1beta/models']
+    },
+    mistral: {
+      api_key: '${MISTRAL_API_KEY}',
+      base_url: 'https://api.mistral.ai',
+      enabled: true,
+      paths: ['/v1/chat/completions', '/v1/embeddings']
+    },
+    groq: {
+      api_key: '${GROQ_API_KEY}',
+      base_url: 'https://api.groq.com',
+      enabled: true,
+      paths: ['/v1/chat/completions']
     }
   },
   logging: {
@@ -129,6 +146,43 @@ export function loadConfig(): Config {
   if (fs.existsSync(CONFIG_PATH)) {
     const fileContent = fs.readFileSync(CONFIG_PATH, 'utf8');
     loadedConfig = yaml.load(fileContent) || {};
+  }
+  
+  if (loadedConfig.proxy || loadedConfig.loopDetection || (loadedConfig.budget && 'defaultDailyUSD' in loadedConfig.budget)) {
+    const mappedConfig: any = {
+      server: {
+        port: loadedConfig.proxy?.port ?? 3456,
+        host: loadedConfig.proxy?.host ?? 'localhost',
+        request_timeout_ms: 120000
+      },
+      budget: {
+        daily_max_usd: loadedConfig.budget?.defaultDailyUSD ?? 5.0,
+        session_max_usd: 10.0,
+        hourly_alert_usd: 5.0,
+        per_request_max_usd: 2.0
+      },
+      loop_detection: {
+        enabled: true,
+        exact_signature_repeat_threshold: loadedConfig.loopDetection?.maxRequestsPerMinute ?? 60,
+        exact_signature_window_seconds: 60,
+        token_growth_threshold: 1.5,
+        token_growth_consecutive_calls: 10,
+        content_similarity_threshold: 0.85,
+        content_similarity_consecutive_calls: 3,
+        tool_error_retry_threshold: loadedConfig.loopDetection?.maxConsecutiveErrors ?? 5,
+        tool_error_retry_window_seconds: 60
+      }
+    };
+    
+    const merged = mergeDeep(DEFAULT_CONFIG, {
+      ...mappedConfig,
+      providers: loadedConfig.providers,
+      logging: loadedConfig.logging,
+      pricing: loadedConfig.pricing,
+      notifications: loadedConfig.notifications,
+      alerts: loadedConfig.alerts
+    });
+    return resolveEnvVars(merged) as Config;
   }
   
   const merged = mergeDeep(DEFAULT_CONFIG, loadedConfig);

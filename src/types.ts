@@ -39,6 +39,22 @@ export interface LoopDetectionConfig {
   tool_error_retry_window_seconds: number;
 }
 
+export interface AlertsConfig {
+  webhook_url?: string;
+  on_loop_detected?: boolean;
+  on_budget_exceeded?: boolean;
+}
+
+export interface WebhookPayload {
+  event: "loop_detected" | "budget_exceeded";
+  message: string;                    // human-readable sentence
+  estimated_savings_usd?: number;     // rough amount prevented by blocking
+  current_spend_usd?: number;         // today's spend so far
+  layer?: number;                     // nested loop layer count (for loop events)
+  budget_limit_usd?: number;          // configured daily limit (for budget events)
+  timestamp: string;                  // ISO 8601 UTC
+}
+
 /**
  * Top-level configuration for TokenFirefighter.
  */
@@ -60,6 +76,8 @@ export interface Config {
     on_budget_100_percent: boolean;
     terminal_bell: boolean;
   };
+  /** Incident webhook alerts configuration */
+  alerts?: AlertsConfig;
   /** Configured providers mapped by name */
   providers: Record<string, ProviderConfig>;
   /** Logging and data retention settings */
@@ -77,6 +95,7 @@ export interface Config {
     custom_overrides: Record<string, number>;
   };
 }
+
 
 /**
  * Data associated with a single API request.

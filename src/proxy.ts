@@ -6,13 +6,17 @@ import { Config, RequestData, LoopResult, SessionState, RouteResult } from './ty
 import { loadConfig } from './config.js';
 import { calculateCost, normalizeModelName } from './pricing.js';
 import { initDatabase, logRequest, updateSessionCost, logSessionStart } from './logger.js';
-import { checkBudget } from './budget.js';
+import { checkBudget, getBudgetStatus } from './budget.js';
 import { checkExactSignature, createSignature, addSignature } from './loop-l1.js';
 import { checkTokenTrajectory, addTokenCount } from './loop-l2.js';
 import { checkContentSimilarity, addBody } from './loop-l3.js';
 import { checkErrorRetryStorm, addError } from './loop-l4.js';
 import { detectProvider } from './adapters/index.js';
 import { serveDashboard, handleApi, handleSSE, broadcastEvent, addAlert } from './dashboard-web.js';
+import { initDb, recordRequest } from './db/requests.js';
+import { startFirstRunTimer, markRequestReceived } from './proxy/firstRunWatcher.js';
+import { loadSecrets } from './config/secrets.js';
+import { sendWebhookAlert } from './alerts/webhook.js';
 
 const sessions = new Map<string, SessionState>();
 
@@ -76,25 +80,67 @@ async function handleRequest(
     handleSSE(req, res);
     return;
   }
+  if (method === 'GET' && (urlPath === '/health' || urlPath === '/api/health')) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', version: '1.0.0' }));
+    return;
+  }
   if (urlPath.startsWith('/api/')) {
     handleApi(req, res, urlPath, config, sessions);
     return;
   }
 
+  // Mark first request received
+  const toolDetected = detectTool(req.headers as Record<string, string | string[] | undefined>, urlPath);
+  markRequestReceived(toolDetected, urlPath);
+
   // Identify provider using adapters
   const adapter = detectProvider(urlPath, req.headers as Record<string, string>);
-  let providerName = adapter.name;
+  const detectedProvider = detectTargetProviderName(req, urlPath);
+  let providerName = detectedProvider;
 
   let providerConfig = config.providers[providerName];
   let targetUrlStr = '';
+
+  // Fallback priority for API keys
+  const inboundKey = extractInboundApiKey(req, urlPath);
+  let resolvedKey: string | null = null;
+
+  if (inboundKey && !isPlaceholderKey(inboundKey)) {
+    resolvedKey = inboundKey;
+  } else {
+    // Check secrets
+    const secrets = loadSecrets();
+    const secretKeyName = providerName === 'gemini' ? 'google' : providerName;
+    if (secrets[secretKeyName]) {
+      resolvedKey = secrets[secretKeyName];
+    } else {
+      // Check env
+      const envKeys = PROVIDER_ENV_MAP[secretKeyName] || [];
+      for (const envKey of envKeys) {
+        if (process.env[envKey]) {
+          resolvedKey = process.env[envKey]!;
+          break;
+        }
+      }
+    }
+  }
+
+  // If no key is found for a detected provider, return 401 or 500
+  if (!resolvedKey && providerName !== 'local' && providerName !== 'generic') {
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: `No API key configured for ${getProviderDisplayName(providerName)}. Run: tokenfirefighter config keys`
+    }));
+    return;
+  }
 
   if (!providerConfig || !providerConfig.enabled) {
     const customTarget = req.headers['x-tokenfirefighter-target'] as string;
     if (customTarget) {
       providerName = 'generic'; // Fallback for stats tracking
-      const apiKey = req.headers['authorization']?.toString().replace('Bearer ', '') || req.headers['x-api-key']?.toString() || '';
       providerConfig = {
-        api_key: apiKey,
+        api_key: resolvedKey || '',
         base_url: customTarget,
         enabled: true
       };
@@ -103,18 +149,31 @@ async function handleRequest(
       targetUrlStr = baseUrl + urlPath;
     } else {
       res.writeHead(404, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: `Provider ${providerName} not found or disabled, and no X-TokenFirefighter-Target header provided.` }));
+      res.end(JSON.stringify({ error: `Provider ${detectedProvider} not found or disabled, and no X-TokenFirefighter-Target header provided.` }));
       return;
     }
   } else {
+    // Clone config to avoid modifying global settings
+    providerConfig = {
+      ...providerConfig,
+      api_key: resolvedKey || ''
+    };
+
     let baseUrl = providerConfig.base_url;
     if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
     targetUrlStr = baseUrl + urlPath;
     
     // Gemini special handling
     if (providerName === 'gemini' && providerConfig.api_key) {
-      const sep = targetUrlStr.includes('?') ? '&' : '?';
-      targetUrlStr += `${sep}key=${providerConfig.api_key}`;
+      let cleanUrlPath = urlPath;
+      if (cleanUrlPath.includes('key=')) {
+        cleanUrlPath = cleanUrlPath.replace(/[?&]key=[^&]+/g, '');
+        if (cleanUrlPath.endsWith('?') || cleanUrlPath.endsWith('&')) {
+          cleanUrlPath = cleanUrlPath.slice(0, -1);
+        }
+      }
+      const sep = cleanUrlPath.includes('?') ? '&' : '?';
+      targetUrlStr = baseUrl + cleanUrlPath + `${sep}key=${providerConfig.api_key}`;
     }
   }
 
@@ -161,6 +220,15 @@ async function handleRequest(
       const reasonStr = loopResult.reason || 'Loop detected';
       addAlert({ id: crypto.randomUUID(), type: 'loop_alert', severity: 'critical', message: reasonStr, timestamp: Date.now() });
       broadcastEvent({ type: 'loop_alert', data: { layer: loopResult.layer, reason: reasonStr } });
+
+      sendWebhookAlert({
+        event: "loop_detected",
+        message: `Runaway loop detected and blocked. ${loopResult.calls_in_loop || 0} requests in ${config.loop_detection.exact_signature_window_seconds}s from ${toolDetected || 'Unknown Tool'} → ${getProviderDisplayName(providerName)}.`,
+        estimated_savings_usd: loopResult.estimated_savings_usd || 0,
+        current_spend_usd: getBudgetStatus(sessionId).dailySpend,
+        layer: 1,
+        timestamp: new Date().toISOString(),
+      });
       return;
     }
 
@@ -187,6 +255,15 @@ async function handleRequest(
         const reasonStr = l3Result.reason || 'Content similarity loop detected';
         addAlert({ id: crypto.randomUUID(), type: 'loop_alert', severity: 'critical', message: reasonStr, timestamp: Date.now() });
         broadcastEvent({ type: 'loop_alert', data: { layer: l3Result.layer, reason: reasonStr } });
+
+        sendWebhookAlert({
+          event: "loop_detected",
+          message: `Runaway loop detected and blocked. Content similarity >= ${config.loop_detection.content_similarity_threshold} for last ${config.loop_detection.content_similarity_consecutive_calls} consecutive calls from ${toolDetected || 'Unknown Tool'} → ${getProviderDisplayName(providerName)}.`,
+          estimated_savings_usd: 0,
+          current_spend_usd: getBudgetStatus(sessionId).dailySpend,
+          layer: 3,
+          timestamp: new Date().toISOString(),
+        });
         return;
       }
     }
@@ -205,6 +282,15 @@ async function handleRequest(
       }
     }));
     // Note: checkBudget already emits budget_alert internally
+    if (budgetResult.reason?.includes('Daily budget')) {
+      sendWebhookAlert({
+        event: "budget_exceeded",
+        message: `Daily budget exceeded ($${budgetResult.current_spend_usd.toFixed(2)} / $${budgetResult.limit_usd.toFixed(2)}). Further requests are blocked until tomorrow.`,
+        current_spend_usd: budgetResult.current_spend_usd,
+        budget_limit_usd: budgetResult.limit_usd,
+        timestamp: new Date().toISOString(),
+      });
+    }
     return;
   }
 
@@ -253,6 +339,15 @@ async function handleRequest(
           addError(session, providerRes.statusCode, providerName);
           addAlert({ id: crypto.randomUUID(), type: 'loop_alert', severity: 'critical', message: reasonStr, timestamp: Date.now() });
           broadcastEvent({ type: 'loop_alert', data: { layer: l4Result.layer, reason: reasonStr } });
+
+          sendWebhookAlert({
+            event: "loop_detected",
+            message: `Runaway loop detected and blocked. Error retry storm: Tool '${toolDetected || 'Unknown Tool'}' errored with status ${providerRes.statusCode} repeated ${config.loop_detection.tool_error_retry_threshold} times within ${config.loop_detection.tool_error_retry_window_seconds}s.`,
+            estimated_savings_usd: 0,
+            current_spend_usd: getBudgetStatus(sessionId).dailySpend,
+            layer: 4,
+            timestamp: new Date().toISOString(),
+          });
           return; // Skip streaming back the error
         }
       }
@@ -313,6 +408,14 @@ async function handleRequest(
       };
 
       logRequest(requestData);
+      const toolDetected = detectTool(req.headers as Record<string, string | string[] | undefined>, urlPath);
+      recordRequest({
+        timestamp: startTime,
+        tool: toolDetected,
+        model: model,
+        tokens_used: inputTokens + outputTokens,
+        cost_usd: cost
+      });
       if (cost > 0) {
         updateSessionCost(sessionId, cost);
         checkBudget(sessionId, cost, config.budget); // Apply actual cost to limit
@@ -355,12 +458,110 @@ async function handleRequest(
   providerReq.end();
 }
 
+function detectTool(headers: Record<string, string | string[] | undefined>, urlPath: string): string | null {
+  const userAgent = (headers['user-agent'] as string || '').toLowerCase();
+  
+  if (userAgent.includes('claude-cli') || userAgent.includes('claude-code')) {
+    return 'Claude Code';
+  }
+  if (userAgent.includes('openai-node') || userAgent.includes('openai-python')) {
+    return 'OpenAI SDK';
+  }
+  if (userAgent.includes('continue')) {
+    return 'Continue.dev';
+  }
+  if (userAgent.includes('kimchi')) {
+    return 'Kimchi';
+  }
+  if (userAgent.includes('opencode')) {
+    return 'OpenCode';
+  }
+  if (userAgent.includes('ollama')) {
+    return 'Ollama';
+  }
+  
+  if (headers['x-continue-version']) return 'Continue.dev';
+  if (headers['x-claude-cli-version']) return 'Claude Code';
+  
+  return null;
+}
+
+const PROVIDER_ENV_MAP: Record<string, string[]> = {
+  openai: ['OPENAI_API_KEY'],
+  anthropic: ['ANTHROPIC_API_KEY'],
+  google: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
+  mistral: ['MISTRAL_API_KEY'],
+  groq: ['GROQ_API_KEY']
+};
+
+export function detectTargetProviderName(req: http.IncomingMessage, urlPath: string): string {
+  // Check x-tokenfirefighter-target domain
+  const customTarget = req.headers['x-tokenfirefighter-target'] as string;
+  if (customTarget) {
+    const host = customTarget.toLowerCase();
+    if (host.includes('openai.com')) return 'openai';
+    if (host.includes('anthropic.com')) return 'anthropic';
+    if (host.includes('googleapis.com') || host.includes('google.com')) return 'gemini';
+    if (host.includes('mistral.ai') || host.includes('mistral')) return 'mistral';
+    if (host.includes('groq.com') || host.includes('groq')) return 'groq';
+  }
+
+  // Check request path
+  if (urlPath.startsWith('/v1/messages')) return 'anthropic';
+  if (urlPath.startsWith('/v1beta/models') || urlPath.includes('generativelanguage')) return 'gemini';
+  if (urlPath.startsWith('/v1/chat/completions') || urlPath.startsWith('/v1/completions') || urlPath.startsWith('/v1/embeddings')) {
+    const auth = (req.headers['authorization'] as string || '').toLowerCase();
+    const apiKey = (req.headers['x-api-key'] as string || '').toLowerCase();
+    if (auth.startsWith('bearer gsk_') || apiKey.startsWith('gsk_')) return 'groq';
+    return 'openai';
+  }
+
+  const adapter = detectProvider(urlPath, req.headers as Record<string, string>);
+  return adapter.name === 'gemini' ? 'gemini' : adapter.name;
+}
+
+export function extractInboundApiKey(req: http.IncomingMessage, urlPath: string): string | null {
+  const auth = req.headers['authorization'] as string | undefined;
+  if (auth) {
+    return auth.replace(/^Bearer\s+/i, '').trim();
+  }
+  const apiKey = req.headers['x-api-key'] as string | undefined;
+  if (apiKey) {
+    return apiKey.trim();
+  }
+  if (urlPath.includes('key=')) {
+    const match = urlPath.match(/[?&]key=([^&]+)/);
+    if (match) {
+      return match[1];
+    }
+  }
+  return null;
+}
+
+export function isPlaceholderKey(key: string): boolean {
+  const k = key.toLowerCase();
+  return k === '' || k.includes('placeholder') || k.includes('dummy') || k.startsWith('tf-');
+}
+
+export function getProviderDisplayName(name: string): string {
+  const displayNames: Record<string, string> = {
+    openai: 'OpenAI',
+    anthropic: 'Anthropic',
+    gemini: 'Google (Gemini)',
+    google: 'Google (Gemini)',
+    mistral: 'Mistral',
+    groq: 'Groq'
+  };
+  return displayNames[name.toLowerCase()] || name;
+}
+
 export function startProxy(config: Config): Promise<http.Server> {
   return new Promise((resolve, reject) => {
     try {
+      initDb();
       const server = createProxy(config);
       server.listen(config.server.port, config.server.host, () => {
-        console.log(`TokenFirefighter proxy listening on ${config.server.host}:${config.server.port}`);
+        startFirstRunTimer(config.server.port);
         resolve(server);
       });
     } catch (err) {

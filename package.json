@@ -2,9 +2,9 @@
   "name": "tokenfirefighter",
   "version": "1.0.0",
   "description": "Free local proxy that prevents AI API cost runaway loops",
-  "main": "dist/index.js",
+  "main": "dist/cli/index.js",
   "bin": {
-    "tokenfirefighter": "dist/index.js"
+    "tokenfirefighter": "dist/cli/index.js"
   },
   "type": "module",
   "files": [
@@ -17,10 +17,10 @@
   },
   "scripts": {
     "build": "tsc",
-    "postbuild": "chmod +x dist/index.js",
+    "postbuild": "chmod +x dist/cli/index.js",
     "prepublishOnly": "npm run build",
     "test": "node --test",
-    "start": "node dist/index.js start"
+    "start": "node dist/cli/index.js start"
   },
   "license": "MIT",
   "devDependencies": {
