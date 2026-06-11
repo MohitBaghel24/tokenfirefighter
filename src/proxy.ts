@@ -11,6 +11,7 @@ import { checkExactSignature, createSignature, addSignature } from './loop-l1.js
 import { checkTokenTrajectory, addTokenCount } from './loop-l2.js';
 import { checkContentSimilarity, addBody } from './loop-l3.js';
 import { checkErrorRetryStorm, addError } from './loop-l4.js';
+import { detectProvider } from './adapters/index.js';
 
 const sessions = new Map<string, SessionState>();
 
@@ -65,22 +66,41 @@ async function handleRequest(
   const method = req.method || 'GET';
   const urlPath = req.url || '/';
 
-  // Identify provider based on URL path
-  let providerName = '';
-  if (urlPath.startsWith('/v1/chat/completions') || urlPath.startsWith('/v1/completions')) {
-    providerName = 'openai';
-  } else if (urlPath.startsWith('/v1/messages')) {
-    providerName = 'anthropic';
-  } else {
-    // Unknown default to openai
-    providerName = 'openai';
-  }
+  // Identify provider using adapters
+  const adapter = detectProvider(urlPath, req.headers as Record<string, string>);
+  let providerName = adapter.name;
 
-  const providerConfig = config.providers[providerName];
+  let providerConfig = config.providers[providerName];
+  let targetUrlStr = '';
+
   if (!providerConfig || !providerConfig.enabled) {
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: `Provider ${providerName} not found or disabled` }));
-    return;
+    const customTarget = req.headers['x-tokenfirefighter-target'] as string;
+    if (customTarget) {
+      providerName = 'generic'; // Fallback for stats tracking
+      const apiKey = req.headers['authorization']?.toString().replace('Bearer ', '') || req.headers['x-api-key']?.toString() || '';
+      providerConfig = {
+        api_key: apiKey,
+        base_url: customTarget,
+        enabled: true
+      };
+      let baseUrl = customTarget;
+      if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
+      targetUrlStr = baseUrl + urlPath;
+    } else {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: `Provider ${providerName} not found or disabled, and no X-TokenFirefighter-Target header provided.` }));
+      return;
+    }
+  } else {
+    let baseUrl = providerConfig.base_url;
+    if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
+    targetUrlStr = baseUrl + urlPath;
+    
+    // Gemini special handling
+    if (providerName === 'gemini' && providerConfig.api_key) {
+      const sep = targetUrlStr.includes('?') ? '&' : '?';
+      targetUrlStr += `${sep}key=${providerConfig.api_key}`;
+    }
   }
 
   // Extract Session ID
@@ -92,19 +112,19 @@ async function handleRequest(
 
   const session = getSession(sessionId);
   
-  // Parse body if JSON to grab the model
-  let model = 'gpt-4o'; // fallback
+  // Parse body if JSON
   let parsedBody: any = {};
   if (bodyBuffer.length > 0) {
     try {
       parsedBody = JSON.parse(bodyBuffer.toString('utf8'));
-      if (parsedBody.model) {
-        model = normalizeModelName(parsedBody.model);
-      }
     } catch (e) {
       // Not a JSON body or malformed
     }
   }
+
+  // Extract model using adapter
+  let rawModel = adapter.extractModel(parsedBody);
+  let model = normalizeModelName(rawModel);
 
   // Layer 1 Loop Detection (Exact Signature)
   const signature = createSignature(urlPath, method, bodyBuffer);
@@ -172,15 +192,19 @@ async function handleRequest(
   addBody(session, bodyString);
 
   // Target routing
-  const targetUrl = new URL(urlPath, providerConfig.base_url);
+  const targetUrl = new URL(targetUrlStr);
   const headers = { ...req.headers };
   headers['host'] = targetUrl.host;
   
-  if (providerName === 'openai') {
-    headers['authorization'] = `Bearer ${providerConfig.api_key}`;
-  } else if (providerName === 'anthropic') {
-    headers['x-api-key'] = providerConfig.api_key;
-    delete headers['authorization']; // Clean up if OpenAI format was passed
+  // Apply adapter auth headers (overwrites)
+  const authHeaders = adapter.getAuthHeaders(providerConfig.api_key);
+  for (const [k, v] of Object.entries(authHeaders)) {
+    if (v) headers[k] = v;
+  }
+  
+  // Clean up unused headers based on provider
+  if (providerName === 'anthropic' || providerName === 'gemini') {
+    delete headers['authorization']; 
   }
 
   const options: https.RequestOptions = {
@@ -226,23 +250,22 @@ async function handleRequest(
       let outputTokens = 0;
       let responseBodyStr = resBodyBuffer.toString('utf8');
 
-      // Attempt to extract usage stats
+      // Attempt to extract usage stats via adapter
+      let usageData = null;
       try {
         const json = JSON.parse(responseBodyStr);
-        if (json.usage) {
-          inputTokens = json.usage.prompt_tokens || json.usage.input_tokens || 0;
-          outputTokens = json.usage.completion_tokens || json.usage.output_tokens || 0;
-        } else if (providerName === 'anthropic' && json.message && json.message.usage) {
-          inputTokens = json.message.usage.input_tokens || 0;
-          outputTokens = json.message.usage.output_tokens || 0;
-        }
+        usageData = adapter.extractUsage(json, responseBodyStr);
       } catch (e) {
-        // Fallback for SSE chunks using regex
-        const inputMatch = responseBodyStr.match(/"prompt_tokens":\s*(\d+)|"input_tokens":\s*(\d+)/);
-        if (inputMatch) inputTokens = parseInt(inputMatch[1] || inputMatch[2], 10);
-        
-        const outputMatch = responseBodyStr.match(/"completion_tokens":\s*(\d+)|"output_tokens":\s*(\d+)/);
-        if (outputMatch) outputTokens = parseInt(outputMatch[1] || outputMatch[2], 10);
+        usageData = adapter.extractUsage(null, responseBodyStr);
+      }
+
+      if (usageData) {
+        inputTokens = usageData.inputTokens;
+        outputTokens = usageData.outputTokens;
+      } else if (adapter.supportsByteEstimation) {
+        // Fallback estimation
+        const estimatedTokens = Math.ceil(resBodyBuffer.length / 4);
+        outputTokens = estimatedTokens;
       }
 
       const cost = calculateCost(model, inputTokens, outputTokens);

@@ -10,6 +10,8 @@ export interface ProviderConfig {
   enabled: boolean;
   /** Optional pricing overrides for specific models */
   pricing_overrides?: Record<string, number>;
+  /** Optional URL path prefixes to match this provider */
+  paths?: string[];
 }
 
 /**
@@ -228,4 +230,17 @@ export interface DashboardRow {
   cost: string;
   /** Status of the request */
   status: 'ok' | 'warning' | 'blocked';
+}
+
+/**
+ * Adapter interface for interacting with arbitrary AI API providers.
+ */
+export interface ProviderAdapter {
+  name: string;
+  match(reqPath: string, reqHeaders?: Record<string, string | string[] | undefined>): boolean;
+  extractModel(parsedBody: any): string;
+  extractUsage(jsonResponse: any, responseStr: string): { inputTokens: number; outputTokens: number } | null;
+  getAuthHeaders(apiKey: string): Record<string, string>;
+  formatModel?(model: string): string;
+  supportsByteEstimation: boolean;
 }

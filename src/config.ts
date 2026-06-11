@@ -40,12 +40,20 @@ export const DEFAULT_CONFIG: Config = {
     openai: {
       api_key: '${OPENAI_API_KEY}',
       base_url: 'https://api.openai.com',
-      enabled: true
+      enabled: true,
+      paths: ['/v1/chat/completions', '/v1/completions']
     },
     anthropic: {
       api_key: '${ANTHROPIC_API_KEY}',
       base_url: 'https://api.anthropic.com',
-      enabled: true
+      enabled: true,
+      paths: ['/v1/messages']
+    },
+    gemini: {
+      api_key: '${GEMINI_API_KEY}',
+      base_url: 'https://generativelanguage.googleapis.com',
+      enabled: true,
+      paths: ['/v1beta/models']
     }
   },
   logging: {
