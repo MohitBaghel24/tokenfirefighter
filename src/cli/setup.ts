@@ -74,9 +74,9 @@ export async function runSetup(dryRun: boolean = false, toolSlug?: string) {
   }
 
   // Load configuration to get port/host
-  const tfConfig = readConfig() || { proxy: { port: 3456, host: 'localhost' } };
-  const port = tfConfig.proxy?.port ?? 3456;
-  const host = tfConfig.proxy?.host ?? 'localhost';
+  const tfConfig = readConfig() || {};
+  const port = tfConfig.server?.port ?? tfConfig.proxy?.port ?? 7272;
+  const host = tfConfig.server?.host ?? tfConfig.proxy?.host ?? 'localhost';
   const proxyUrl = `http://${host}:${port}`;
 
   console.log(`Using TokenFirefighter proxy URL: ${CYAN}${proxyUrl}${RESET}\n`);
