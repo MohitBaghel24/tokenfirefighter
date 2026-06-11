@@ -4,11 +4,11 @@
 ![license](https://img.shields.io/npm/l/tokenfirefighter)
 ![build status](https://img.shields.io/github/actions/workflow/status/MohitBaghel24/tokenfirefighter/ci.yml)
 
-Free local proxy that prevents AI API cost runaway loops.
+Free local proxy that prevents AI API cost runaway loops. Supports OpenAI, Anthropic, Google Gemini, and *any* arbitrary custom or local API provider!
 
 ## Why
 
-*The $23K story:* AI agents and autonomous scripts can easily enter infinite loops. A bug in a recursive function or a model hallucination can result in thousands of API calls within minutes, burning through thousands of dollars before you can hit stop. **TokenFirefighter** sits locally between your code and the providers (OpenAI, Anthropic) to actively monitor, budget, and block runaway loops.
+*The $23K story:* AI agents and autonomous scripts can easily enter infinite loops. A bug in a recursive function or a model hallucination can result in thousands of API calls within minutes, burning through thousands of dollars before you can hit stop. **TokenFirefighter** sits locally between your code and the providers to actively monitor, budget, and block runaway loops.
 
 ## Quick Start
 
@@ -19,6 +19,25 @@ export OPENAI_BASE_URL=http://localhost:7272/v1
 export OPENAI_API_KEY=your-key-here
 tokenfirefighter start
 ```
+
+## Universal Provider Support (Zero-Config)
+
+TokenFirefighter uses a robust Provider Adapter Pattern. Out of the box, it seamlessly parses the models, tokens, and billing logic for:
+- **OpenAI** (`/v1/chat/completions`)
+- **Anthropic** (`/v1/messages`)
+- **Google Gemini** (`/v1beta/models/*:generateContent`)
+
+**Using an unknown or local provider? (e.g. Groq, Cohere, Ollama, vLLM)**
+You can dynamically route to *any* AI provider without touching the configuration file. Simply point your SDK to TokenFirefighter and pass the `X-TokenFirefighter-Target` header.
+
+```bash
+curl -X POST http://localhost:7272/v1/chat/completions \
+  -H "X-TokenFirefighter-Target: https://api.groq.com" \
+  -H "Authorization: Bearer YOUR_GROQ_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "llama3-8b-8192", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+TokenFirefighter will proxy the request to `https://api.groq.com`, automatically intercept the token usage by scanning the JSON response or byte-lengths, and safely track your generic spending on the dashboard!
 
 ## How it works
 
@@ -34,7 +53,7 @@ TokenFirefighter utilizes 4 layers of loop detection:
 
 ## Configuration
 
-When you run `tokenfirefighter init`, a `config.yaml` is generated at `~/.tokenfirefighter/config.yaml`:
+When you run `tokenfirefighter init`, a `config.yaml` is generated at `~/.tokenfirefighter/config.yaml`. Here you can configure specific limits and provider keys:
 
 ```yaml
 server:
@@ -46,7 +65,13 @@ budget:
 providers:
   openai:
     api_key: "${OPENAI_API_KEY}"
-    base_url: "https://api.openai.com/v1"
+    base_url: "https://api.openai.com"
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+    base_url: "https://api.anthropic.com"
+  gemini:
+    api_key: "${GEMINI_API_KEY}"
+    base_url: "https://generativelanguage.googleapis.com"
 ```
 
 ## Contributing
