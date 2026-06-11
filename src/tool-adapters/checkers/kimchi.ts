@@ -24,8 +24,8 @@ export async function checkKimchi(): Promise<ToolCheckReport> {
   if (binCheck.pass && binCheck.path) {
     installed = true;
     
-    // 2. Version check (min 2.0)
-    const verCheck = checkVersionSufficient('kimchi', '--version', '2.0.0', 'npm update -g @kimchi/cli', 'Kimchi');
+    // 2. Version check (min 0.1.0)
+    const verCheck = checkVersionSufficient('kimchi', '--version', '0.1.0', 'npm update -g @kimchi/cli', 'Kimchi');
     checks.push(verCheck.check);
     version = verCheck.version;
 
@@ -58,11 +58,11 @@ export async function checkKimchi(): Promise<ToolCheckReport> {
         checks.push(checkAlreadyProxied(configPath, doc.apiBaseUrl, 'Kimchi'));
 
         // Version schema check
-        if (doc.version && parseFloat(doc.version) < 2) {
+        if (doc.version && parseFloat(doc.version) < 0.1) {
           checks.push({
             pass: false,
             severity: 'error',
-            message: 'Your Kimchi config version is too old. Upgrade Kimchi to v2.0+.',
+            message: 'Your Kimchi config version is too old. Upgrade Kimchi to v0.1+.',
             fix: 'npm update -g @kimchi/cli'
           });
         } else {
