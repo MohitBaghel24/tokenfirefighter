@@ -305,6 +305,11 @@ async function handleRequest(
   headers['host'] = targetUrl.host;
   
   // Apply adapter auth headers (overwrites)
+  delete headers['authorization'];
+  delete headers['x-api-key'];
+  delete headers['Authorization'];
+  delete headers['X-API-Key'];
+  
   const authHeaders = adapter.getAuthHeaders(providerConfig.api_key);
   for (const [k, v] of Object.entries(authHeaders)) {
     if (v) headers[k] = v;
